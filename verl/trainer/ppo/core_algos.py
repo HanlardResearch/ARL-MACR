@@ -905,6 +905,80 @@ def compute_policy_loss(
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 
+@register_policy_loss("arl")
+def compute_policy_loss_arl(
+        old_log_prob: torch.Tensor,
+        log_prob: torch.Tensor,
+        advantages: torch.Tensor,
+        response_mask: torch.Tensor,
+        loss_agg_mode: str = "seq-mean-token-mean",
+        config: Optional[ActorConfig] = None,
+        rollout_is_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """
+
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            Aggregation mode for `agg_loss`. For GSPO, it is recommended to use "seq-mean-token-mean".
+    """
+
+    assert config is not None
+    assert isinstance(config, ActorConfig)
+
+    negative_approx_kl = log_prob - old_log_prob
+
+    # compute sequence-level importance ratio:
+    # si(θ) = (π_θ(yi|x)/π_θold(yi|x))^(1/|yi|) =
+    # exp [(1/|y_i|) * Σ_t log(π_θ(y_i,t|x,y_i,<t)/π_θold(y_i,t|x,y_i,<t))]
+    seq_lengths = torch.sum(response_mask, dim=-1).clamp(min=1)
+    negative_approx_kl_seq = torch.sum(negative_approx_kl * response_mask, dim=-1) / seq_lengths
+
+    seq_ratio_scalar = negative_approx_kl_seq.exp()  # shape: (B,)
+    # --- Step 2: Apply TOPR's asymmetric treatment with sg ---
+    threhold_arl = torch.quantile(advantages, 0.8)
+    with torch.no_grad():
+        pos_adv_mask = (advantages > threhold_arl).any(dim=-1, keepdim=True)  # shape: (B, 1)
+        neg_adv_mask = (advantages <= threhold_arl).any(dim=-1, keepdim=True)  # shape: (B, 1)
+
+    # For positive examples: weight = 1.0
+    # For negative examples: weight = sg(clamp(seq_ratio_scalar, 0, 1))
+    # Note: sg means we detach it from gradient computation
+    clipped_ratio_for_neg = torch.clamp(seq_ratio_scalar, 0.0, 1.0).detach()  # sg applied here!
+    combined_weight = pos_adv_mask.float() * 1.0 + neg_adv_mask.float() * clipped_ratio_for_neg.unsqueeze(-1)
+
+    # --- Step 3: Compute loss = - weight * advantage * log_prob ---
+    # The gradient comes ONLY from log_prob, weight is detached (for negatives) or constant (for positives)
+    pg_losses = -advantages * combined_weight * log_prob
+
+    # Apply rollout correction weights if provided
+    if rollout_is_weights is not None:
+        pg_losses = pg_losses * rollout_is_weights
+
+    # for GSPO, we need to aggregate the loss at the sequence level (seq-mean-token-mean)
+    pg_loss = agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode="seq-mean-token-mean", **config.global_batch_info
+    )
+
+    # For compatibility, return zero for pg_clipfrac_lower (not used in standard GSPO)
+    # was_clipped = (seq_ratio_scalar > 1.0).float()
+    # pg_clipfrac_lower = verl_F.masked_mean(was_clipped * neg_adv_mask.squeeze(), response_mask)
+    # pg_clipfrac = pg_clipfrac_lower
+
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    pg_metrics = {
+        "actor/pg_clipfrac": 1.0,
+        "actor/ppo_kl": ppo_kl.detach().item(),
+        "actor/pg_clipfrac_lower": 0.0,
+    }
+    return pg_loss, pg_metrics
 @register_policy_loss("vanilla")  # type: ignore[arg-type]
 def compute_policy_loss_vanilla(
     old_log_prob: torch.Tensor,

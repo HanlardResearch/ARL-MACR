@@ -28,6 +28,7 @@ When working with Megatron:
 1224: 模型压缩think
 1225: 删除模型压缩think，使用prompt改变模型think长度, 没有历史错误
 1227: 使用_decode_responses_wt_MaxLen_with_simple_think
+0102: _decode_responses_wt_MaxLen_with_simple_think -> _decode_responses_wt_MaxLen
 """
 
 import asyncio
@@ -761,7 +762,7 @@ class vLLMRollout(BaseRollout):
         gen_input = self._encode_prompts_to_dataproto_with_maxLen(gen_prompts,
                                                                   prompts.meta_info.copy(), self.config.prompt1_length)
         gen_output = self._generate_sequences(gen_input)
-        agent1_outputs = self._decode_responses_wt_MaxLen_with_simple_think(gen_output, self.config.response1_length)  # str
+        agent1_outputs = self._decode_responses_wt_MaxLen(gen_output, self.config.response1_length)  # str
         ####################################### <Agent-1> ###################################################
 
         ####################################### <Summary Agent> ################################################
@@ -808,7 +809,7 @@ class vLLMRollout(BaseRollout):
             rev_input = self._encode_prompts_to_dataproto_with_maxLen(rev_prompts, prompts.meta_info.copy(),
                                                                       self.config.prompt2_length)
             rev_output = self._generate_sequences(rev_input)
-            active_review_outputs = self._decode_responses_wt_MaxLen_with_simple_think(rev_output, self.config.response2_length)
+            active_review_outputs = self._decode_responses_wt_MaxLen(rev_output, self.config.response2_length)
             active_review_outputs = [f"(Review Times: <{iter_num+1}>)\n"+x for x in active_review_outputs]
 
             print(f"vllm_rollout_spmd.py line-629 (Review Times: <{iter_num+1}>): {len(active_indices)} active samples")
@@ -858,7 +859,7 @@ class vLLMRollout(BaseRollout):
                                                                           prompts.meta_info.copy(),
                                                                           self.config.prompt3_length)
                 imp_output = self._generate_sequences(imp_input)
-                improved_answers = self._decode_responses_wt_MaxLen_with_simple_think(imp_output, self.config.response3_length)
+                improved_answers = self._decode_responses_wt_MaxLen(imp_output, self.config.response3_length)
                 # 更新当前答案
                 for idx_in_imp, global_idx in enumerate(improve_indices):
                     current_answers[global_idx] = improved_answers[idx_in_imp]
@@ -890,7 +891,7 @@ class vLLMRollout(BaseRollout):
                                                                             prompts.meta_info.copy(),
                                                                             self.config.prompt3_length)
             final_imp_output = self._generate_sequences(final_imp_input)
-            final_pass_answers = self._decode_responses_wt_MaxLen_with_simple_think(final_imp_output,self.config.response3_length)
+            final_pass_answers = self._decode_responses_wt_MaxLen(final_imp_output,self.config.response3_length)
             for idx_in_pass, global_idx in enumerate(pass_indices):
                 final_answers[global_idx] = final_pass_answers[idx_in_pass]
 

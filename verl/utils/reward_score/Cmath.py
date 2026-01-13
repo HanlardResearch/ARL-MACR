@@ -930,6 +930,94 @@ def compute_score2(solution_str: str, ground_truth: str, timeout_score: float = 
     return res
 
 
+
+def compute_score4(solution_str: str, ground_truth: str, timeout_score: float = 0, data_source=None, extra_info=None,                reward_router_address=None, reward_model_tokenizer=None,) -> bool:
+    """
+    只看最终结果给0个1奖励
+    :param solution_str:
+    :param ground_truth:
+    :param timeout_score:
+    :param data_source:
+    :param extra_info:
+    :param reward_router_address:
+    :param reward_model_tokenizer:
+    :return:
+    """
+
+    assert extra_info is not None
+
+
+    format_right = multi_agent_format_verify(solution_str)
+
+    if not format_right:
+        # print("multi_agent_format Error",solution_str)
+        if extra_info['split']=='train':
+            res = {"score": 0.0, "reward_info": f"multi_agent_format Error"}
+        else:
+            test_score = compute_score(solution_str, ground_truth, timeout_score)
+            res = {"score": test_score, "reward_info": f"multi_agent_format Error"}
+        return res
+    agent1_out = solution_str.split("[/PROPOSED SOLUTION]")[0]
+    agent2_out = solution_str.split("[/REVIEW FEEDBACK]")[0].split("[REVIEW FEEDBACK]")[1]
+    agent3_out = solution_str.split("[/REVIEW FEEDBACK]")[1]
+
+
+    try:
+        score_agent1 = ver(agent1_out, ground_truth)
+        score_agent3 = ver(agent3_out, ground_truth)
+        if score_agent1 < 0.5: # agent-1 答错了
+            if "<Pass>" in agent2_out:  # agent-2 判断失误
+                if score_agent3 < 0.5: # agent-3 改进无效
+                    ret_score = 0.0
+                    reward_info="Cond1: Agent-1 <Wrong>, Agent-2 <Pass>, Agent-3 <Wrong>"
+                else: # agent-3 改进有效
+                    ret_score = 1.0
+                    reward_info = "Cond2: Agent-1 <Wrong>, Agent-2 <Pass>, Agent-3 <Right>"
+            elif "<Fail>" in agent2_out: # agent-2 判断正确
+                if score_agent3 < 0.5: # agent-3 改进无效
+                    ret_score = 0.0+0.1
+                    reward_info="Cond3: Agent-1 <Wrong>, Agent-2 <Fail>, Agent-3 <Wrong>"
+                else:
+                    ret_score = 1.0  # agent-3 改进有效
+                    reward_info = "Cond4: Agent-1 <Wrong>, Agent-2 <Fail>, Agent-3 <Right>"
+            else:
+                ret_score = 0.0
+                reward_info = "Cond5: Agent-1 <Wrong>, Agent-2 <FmtErr>"
+        else: # agent-1 答对了
+            if "<Fail>" in agent2_out:  # agent-2 判断失误
+                if score_agent3 < 0.5: # agent-3 越改越差
+                    ret_score = 0.0
+                    reward_info="Cond6: Agent-1 <Right>, Agent-2 <Fail>, Agent-3 <Wrong>"
+                else: # agent-3 改进有效
+                    ret_score = 1.0
+                    reward_info="Cond7: Agent-1 <Right>, Agent-2 <Fail>, Agent-3 <Right>"
+            elif "<Pass>" in agent2_out: # agent-2 判断正确
+                if score_agent3 < 0.5: # agent-3 改进无效
+                    ret_score = 0.0+0.1
+                    reward_info="Cond8: Agent-1 <Right>, Agent-2 <Pass>, Agent-3 <Wrong>"
+                else:
+                    ret_score = 1.0 # agent-3 改进有效
+                    reward_info="Cond9: Agent-1 <Right>, Agent-2 <Pass>, Agent-3 <Right>"
+            else:
+                ret_score = 0.0
+                reward_info = "Cond10: Agent-1 <Right>, Agent-2 <FmtErr>"
+        res = {"score": ret_score, "reward_info": reward_info}
+    except TimeoutException:
+        res = {"score": timeout_score, "reward_info": "Cond11: <Verify Timeout>"}
+    except Exception as e:
+        res = {"score": 0.0, "reward_info": f"Cond12: {e}"}
+
+    # 测试条件下不使用多智能体打分规则，但是记录 reward_info
+    if extra_info['split']=='test':
+        train_score = res["score"]
+        reward_info= res['reward_info']
+        test_score = compute_score(solution_str, ground_truth, timeout_score)
+        res =  {"score": test_score, "reward_info": f"Train Score: {train_score}, {reward_info}"}
+
+
+    # print(res)
+    return res
+
 def edit_distance_reward(s1: str, s2: str) -> int:
     """
     计算两个字符串之间的编辑距离（Levenshtein 距离）

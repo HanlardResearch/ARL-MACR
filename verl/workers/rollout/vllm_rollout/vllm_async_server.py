@@ -153,7 +153,8 @@ class vLLMHttpServerBase:
 
         self.config: RolloutConfig = omega_conf_to_dataclass(config)
         self.model_config: HFModelConfig = omega_conf_to_dataclass(model_config, dataclass_type=HFModelConfig)
-        self.config.max_model_len = self.config.prompt_length + self.config.response_length
+        if getattr(self.config, "max_model_len", None) is None:
+            self.config.max_model_len = self.config.prompt_length + self.config.response_length
         self.rollout_mode = rollout_mode
         self.workers = workers
 
@@ -213,9 +214,10 @@ class vLLMHttpServerBase:
             top_k=self.config.top_k,
             top_p=self.config.top_p,
             repetition_penalty=1.0,
-            max_new_tokens=self.config.response_length,
+            # max_new_tokens=self.config.response_length,
+            max_new_tokens=self.config.max_model_len,
         )
-        logger.info(f"override_generation_config: {override_generation_config}")
+        logger.info(f"override_generation_config*********: {override_generation_config}")
         quantization = self.config.quantization
         if quantization is not None:
             if quantization == "fp8":
@@ -248,7 +250,7 @@ class vLLMHttpServerBase:
             "disable_log_stats": self.config.disable_log_stats,
             "tensor_parallel_size": self.config.tensor_model_parallel_size,
             "seed": self.config.get("seed", 0),
-            "override_generation_config": json.dumps(override_generation_config),
+            # "override_generation_config": json.dumps(override_generation_config),
             "quantization": quantization,
             "hf_overrides": {"quantization_config": fp8_block_quant_kwargs} if quantization == "fp8" else None,
             **engine_kwargs,
@@ -303,7 +305,10 @@ class vLLMHttpServerBase:
                 server_args.append(f"--{k}")
                 # Use json.dumps for dict to ensure valid JSON format
                 server_args.append(json.dumps(v) if isinstance(v, dict) else str(v))
-
+        
+        server_args.extend(["--generation-config", "vllm"])
+        logger.info(f"server_args*********: {server_args}")
+        
         if self.replica_rank == 0:
             pprint(server_args)
 
