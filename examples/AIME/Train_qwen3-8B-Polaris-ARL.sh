@@ -53,7 +53,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     actor_rollout_ref.actor.policy_loss.loss_mode=arl \
     custom_reward_function.path=/userhome/Research_HUB/verl/verl/utils/reward_score/Cmath.py \
-    custom_reward_function.name=compute_score2 \
+    custom_reward_function.name=compute_score4 \
     +actor_rollout_ref.rollout.extra.roles=$ROLE_NAME \
     +actor_rollout_ref.rollout.extra.role_config_path=/userhome/Research_HUB/verl/data_dir/AgentRoles \
     +actor_rollout_ref.rollout.extra.max_iter=$MAX_ITER \
