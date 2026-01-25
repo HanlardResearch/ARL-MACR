@@ -1,14 +1,10 @@
-# Tested successfully on the hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0 image.
-# It outperforms the Qwen2 7B base model by two percentage points on the test set of GSM8K.
 
 export TZ='Asia/Shanghai'
 formatted_day=$(date "+%Y%m%d")
 formatted_time=$(date "+%Y%m%d-%H-%M-%S")
 
-
-
 modelpath=/extrahome0/HF_models/Qwen/Qwen3-8B
-cp /userhome/Research_HUB/verl/data_dir/Model-Conifg/Qwen3-8B-default-config.json $modelpath/config.json
+#cp /userhome/Research_HUB/verl/data_dir/Model-Conifg/Qwen3-8B-default-config.json $modelpath/config.json
 cat $modelpath/config.json
 
 
@@ -22,19 +18,19 @@ cat $modelpath/config.json
 # This is run name
 loss_mode=grpo
 ROLE_NAME=SCI-Agent-v9  # 如果 $1 为空，默认使用 default_role
-MAX_ITER=6             # 如果 $2 为空，默认使用 3
+MAX_ITER=3            # 如果 $2 为空，默认使用 3
 
-experiment_name=Polaris_Qwen3-8B-$ROLE_NAME-$formatted_time
-rolloutdir=/userhome/Research_HUB/verl/output_dir/POLARIS/${formatted_day}/Train-${formatted_time}/rollouts
-checkpointdir=/extrahome0/Research_HUB/verl/output_dir/POLARIS/${formatted_day}/Train-${formatted_time}/checkpoints
-valrolloutdir=/userhome/Research_HUB/verl/output_dir/POLARIS/${formatted_day}/Train-${formatted_time}/val-rollouts
-log_path=/userhome/Research_HUB/verl/output_dir/POLARIS/${formatted_day}/Train-${formatted_time}/$experiment_name.log
+experiment_name=GPU7-HPO-Diffculty1_Qwen3-8B-$ROLE_NAME-$formatted_time
+rolloutdir=/userhome/Research_HUB/verl/output_dir/HPO/${formatted_day}/Train-${formatted_time}/rollouts
+checkpointdir=/extrahome0/Research_HUB/verl/output_dir/HPO/${formatted_day}/Train-${formatted_time}/checkpoints
+valrolloutdir=/userhome/Research_HUB/verl/output_dir/HPO/${formatted_day}/Train-${formatted_time}/val-rollouts
+log_path=/userhome/Research_HUB/verl/output_dir/HPO/${formatted_day}/Train-${formatted_time}/$experiment_name.log
 mkdir -p $rolloutdir
 mkdir -p $checkpointdir
 mkdir -p $valrolloutdir
 export SWANLAB_MODE=cloud
-export SWANLAB_LOG_DIR=/userhome/Research_HUB/verl/output_dir/POLARIS/${formatted_day}/Train-${formatted_time}
-export SWANLAB_API_KEY=7XJghZVNJYoRHjyZBnlSu
+export SWANLAB_LOG_DIR=/userhome/Research_HUB/verl/output_dir/HPO/${formatted_day}/Train-${formatted_time}
+export SWANLAB_API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXX
 echo $log_path
 set -x
 
@@ -50,8 +46,10 @@ export HYDRA_FULL_ERROR=1
 
 python3 -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
+    actor_rollout_ref.actor.policy_loss.loss_mode=hpo \
     algorithm.adv_estimator=grpo \
-    actor_rollout_ref.actor.policy_loss.loss_mode=arl \
+    +actor_rollout_ref.actor.HPO_epsilon=1e-4 \
+    +actor_rollout_ref.actor.HPO_Hvalue=0.8 \
     custom_reward_function.path=/userhome/Research_HUB/verl/verl/utils/reward_score/Cmath.py \
     custom_reward_function.name=compute_score4 \
     +actor_rollout_ref.rollout.extra.roles=$ROLE_NAME \
@@ -59,7 +57,7 @@ python3 -m verl.trainer.main_ppo \
     +actor_rollout_ref.rollout.extra.max_iter=$MAX_ITER \
     actor_rollout_ref.model.path=$modelpath \
     trainer.validation_data_dir=$valrolloutdir \
-    data.train_files=/userhome/Research_HUB/verl/data_dir/POLARIS/Polaris_train_filter_1231.parquet \
+    data.train_files=/userhome/Research_HUB/verl/data_dir/POLARIS/Polaris_train_filter_Diffculty1.parquet \
     data.val_files="[ '/userhome/Research_HUB/verl/data_dir/gsm8k-style/aime2024.parquet', '/userhome/Research_HUB/verl/data_dir/gsm8k-style/aime2025.parquet' ]" \
     actor_rollout_ref.rollout.prompt_length=1024 \
     actor_rollout_ref.rollout.response_length=31744 \
@@ -110,7 +108,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger='["console","swanlab"]' \
-    trainer.project_name='POLARIS' \
+    trainer.project_name='GRMI-HPO' \
     trainer.experiment_name=$experiment_name \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \

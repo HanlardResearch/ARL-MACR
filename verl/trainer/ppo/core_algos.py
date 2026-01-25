@@ -979,6 +979,114 @@ def compute_policy_loss_arl(
         "actor/pg_clipfrac_lower": 0.0,
     }
     return pg_loss, pg_metrics
+
+
+@register_policy_loss("hpo")
+def compute_policy_loss_hpo(
+        old_log_prob: torch.Tensor,
+        log_prob: torch.Tensor,
+        advantages: torch.Tensor,
+        response_mask: torch.Tensor,
+        loss_agg_mode: str = "seq-mean-token-mean",
+        config: Optional[ActorConfig] = None,
+        rollout_is_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """
+
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            Aggregation mode for `agg_loss`. For GSPO, it is recommended to use "seq-mean-token-mean".
+    """
+
+    assert config is not None
+    assert isinstance(config, ActorConfig)
+    clip_ratio_low = config.clip_ratio_low if config.clip_ratio_low is not None else config.clip_ratio
+    clip_ratio_high = config.clip_ratio_high if config.clip_ratio_high is not None else config.clip_ratio
+
+    negative_approx_kl = log_prob - old_log_prob
+
+    # compute sequence-level importance ratio:
+    # si(θ) = (π_θ(yi|x)/π_θold(yi|x))^(1/|yi|) =
+    # exp [(1/|y_i|) * Σ_t log(π_θ(y_i,t|x,y_i,<t)/π_θold(y_i,t|x,y_i,<t))]
+    seq_lengths = torch.sum(response_mask, dim=-1).clamp(min=1)
+    negative_approx_kl_seq = torch.sum(negative_approx_kl * response_mask, dim=-1) / seq_lengths
+
+    # Combined ratio at token level:
+    # s_i,t(θ) = sg[s_i(θ)] · π_θ(y_i,t|x, y_i,<t) / sg[π_θ(y_i,t|x, y_i,<t)]
+    # In log space: log(s_i,t(θ)) = sg[log(s_i(θ))] + log_prob - sg[log_prob]
+    log_seq_importance_ratio = log_prob - log_prob.detach() + negative_approx_kl_seq.detach().unsqueeze(-1)
+    log_seq_importance_ratio = torch.clamp(log_seq_importance_ratio, max=10.0)  # clamp for numerical stability
+
+    # finaly exp() to remove log
+    seq_importance_ratio = torch.exp(log_seq_importance_ratio)
+    pg_losses1 = -advantages * seq_importance_ratio
+    pg_losses2 = -advantages * torch.clamp(seq_importance_ratio, 1 - clip_ratio_low, 1 + clip_ratio_high)
+    pg_losses = torch.maximum(pg_losses1, pg_losses2)
+
+    ######## Insert HPO Part to GSPO  ########
+    with torch.no_grad():
+        epsilon = config.HPO_epsilon if hasattr(config, "HPO_epsilon") else 1e-4
+        high_value_threhold = config.HPO_Hvalue if hasattr(config, "HPO_Hvalue") else 0.8
+        high_adv = torch.quantile(advantages, high_value_threhold)
+
+        logratio = -negative_approx_kl.detach().clamp(min=-20,max=20)
+        kl_token = logratio.exp() - logratio - 1
+        kl_seq = torch.sum(kl_token * response_mask, dim=-1, keepdim=True) / seq_lengths  # shape: (B, 1)
+        adv_seq = advantages.mean(dim=-1, keepdim=True)
+        # In trust region
+        rl_seq_mask = kl_seq <= epsilon  # shape: (B, 1)
+        # Out of trust region, but high value
+        sft_seq_mask = (adv_seq > high_adv) * (kl_seq > epsilon)  # shape: (B, 1)
+        # Out of trust region, but low value
+        discard_seq_mask = (adv_seq <= high_adv) * (kl_seq > epsilon)  # shape: (B, 1)
+        sft_pct =  (sft_seq_mask.sum() / log_prob.shape[0]).item()
+        rl_pct =  (rl_seq_mask.sum() / log_prob.shape[0]).item()
+        discard_pct =  (discard_seq_mask.sum() / log_prob.shape[0]).item()
+
+        assert (rl_seq_mask.sum() + sft_seq_mask.sum() + discard_seq_mask.sum()).item() == log_prob.shape[0]
+
+    pg_losses_SFT = -advantages * log_prob
+    pg_losses_RL = pg_losses
+    pg_losses = rl_seq_mask.float() * pg_losses_RL + sft_seq_mask.float() * pg_losses_SFT
+    ######## Insert HPO Part to GSPO  ########
+
+    # Apply rollout correction weights if provided
+    if rollout_is_weights is not None:
+        pg_losses = pg_losses * rollout_is_weights
+
+    # for GSPO, we need to aggregate the loss at the sequence level (seq-mean-token-mean)
+    pg_loss = agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode="seq-mean-token-mean", **config.global_batch_info
+    )
+
+    # For compatibility, return zero for pg_clipfrac_lower (not used in standard GSPO)
+    pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses1).float(), response_mask)
+    pg_clipfrac_lower = torch.tensor(0.0, device=pg_loss.device)
+
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    pg_metrics = {
+        "actor/pg_clipfrac": pg_clipfrac.detach().item(),
+        "actor/ppo_kl": ppo_kl.detach().item(),
+        "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
+        "actor/sft_pct": sft_pct,
+        "actor/rl_pct": rl_pct,
+        "actor/discard_pct": discard_pct,
+        "actor/high_adv": high_adv.detach().item(),
+        "actor/kl_seq": kl_seq.detach().item(),
+    }
+    return pg_loss, pg_metrics
+
+
+
+
 @register_policy_loss("vanilla")  # type: ignore[arg-type]
 def compute_policy_loss_vanilla(
     old_log_prob: torch.Tensor,
