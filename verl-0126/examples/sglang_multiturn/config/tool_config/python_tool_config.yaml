@@ -1,0 +1,17 @@
+tools:
+  - class_name: "verl.tools.python_tool.PythonTool"
+    config:
+      type: native
+    tool_schema:
+      type: "function"
+      function:
+        name: "route_to_role"
+        description: "Routes mathematical reasoning between two specialized agents: the **reviewer** (Mathematical Logic Auditor) who rigorously checks solution correctness and flags logical flaws, and the **improver** (Master Mathematician) who revises and perfects solutions based on audit feedback. Call with `next_role='reviewer'` to initiate verification of a proposed solution; call with `next_role='improver'` to refine a solution after receiving audit feedback. Use this tool to enforce a verification-before-finalization workflow for mathematical problems."
+        parameters:
+          type: "object"
+          properties:
+            next_role:
+              type: "string"
+              description: "Target role to route to"
+              enum: ["reviewer", "improver"]
+          required: ["next_role"]

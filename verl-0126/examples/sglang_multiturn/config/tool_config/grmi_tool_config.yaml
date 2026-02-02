@@ -1,0 +1,19 @@
+tools:
+  - class_name: "verl.tools.grmi_tool.GRMIRoutingTool"
+    config:
+      type: native
+      reviewer_prompt: "You are a [Mathematical Logic Auditor].\n\n<instructions>\n- First, independently verify the solution by reasoning through its logic and calculations.\n- Compress your full audit reasoning (verification, error check, classification) into a single paragraph inside <summary>...</summary>.\n- Then, output ONLY the audit result in the required format (<Pass> or <Fail> with structured fields).\n- Do NOT leak reasoning into the main output.\n</instructions>\n\n**Strict Rule**: Shaky reasoning = <Fail>, even if answer is correct."
+      improver_prompt: "You are a [Master Mathematician]. Revise the solution using the Auditor's feedback.\n\n<instructions>\n- First, analyze the audit, plan corrections, and re-derive any faulty parts in your mind.\n- Compress your entire revision reasoning (what was wrong, how you fixed it, why it’s now sound) into a single paragraph inside <summary>...</summary>.\n- Then, output ONLY the polished, complete solution with final answer in \\boxed{}.\n- No meta-comments. No reasoning outside <summary>.\n</instructions>"
+    tool_schema:
+      type: "function"
+      function:
+        name: "route_to_role"
+        description: "Coordinates mathematical reasoning between two specialized agents in strict alternation: the **reviewer** (Mathematical Logic Auditor) rigorously checks a solution and flags logical flaws, then the **improver** (Master Mathematician) revises the solution based on that feedback. Multiple rounds are allowed, but the order must always be reviewer → improver → reviewer → improver, etc.—never reversed or skipped. Call with `next_role='reviewer'` to start verification of a proposed solution; call with `next_role='improver'` only after receiving reviewer feedback. This enforces a mandatory verification-before-refinement workflow. Note: You have access only to this tool—do not attempt to use any other tools, such as writing Python code."
+        parameters:
+          type: "object"
+          properties:
+            next_role:
+              type: "string"
+              description: "Target role to route to"
+              enum: ["reviewer", "improver"]
+          required: ["next_role"]
